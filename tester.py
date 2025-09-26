@@ -184,9 +184,9 @@ class Tester:
         all_emb_s = np.array(all_emb_s)
 
         tsne_c = TSNE(
-            n_components=3, n_iter=1000
+            n_components=3, max_iter=1000
         )  # make use of the minor intra-class difference to plot TSNE
-        tsne_s = TSNE(n_components=3, n_iter=1000)
+        tsne_s = TSNE(n_components=3, max_iter=1000)
         all_emb_c_and_codebook = np.concatenate((all_emb_c, self.codebook), axis=0)
         emb_c_and_codebook_tsne = tsne_c.fit_transform(all_emb_c_and_codebook)
         emb_s_tsne = tsne_s.fit_transform(all_emb_s)

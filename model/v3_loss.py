@@ -47,7 +47,7 @@ class V3Loss:
         x_hat,
         z_c,
         z_c_vq,
-        vq_commit_loss,
+        commit_loss,
         z_s,
         x,
     ):
@@ -94,7 +94,7 @@ class V3Loss:
             "style_loss": style_loss,
             "sample_loss": sample_loss,
             "fragment_loss": fragment_loss,
-            "commit_loss": vq_commit_loss,
+            "commit_loss": commit_loss,
             "total_loss": total_loss,
         }
 

@@ -10,7 +10,7 @@ data_dir: "../data/Sprites_h5"
 method: "V3"
 
 device: "cuda"
-precision: "bfloat16" # float32, float16 or bfloat16
+precision: "float32" # float32, float16 or bfloat16
 num_workers: 4
 batch_size: 32
 epochs: 10000 # incremental if load_checkpoint is given
@@ -41,7 +41,7 @@ model_config:
   d_emb_s: 512
   n_atoms: 18
   threshold_ema_dead_code: 8
-  vq_ema_decay: 0.95
+  vq_ema_decay: 0.98
 
 optimizer_config:
   optimizer: "AdamW"

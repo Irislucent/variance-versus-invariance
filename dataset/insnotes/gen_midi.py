@@ -47,11 +47,11 @@ def gen_dataset_midi(
         for j in range(n_per_ins):
             midi_data = pretty_midi.PrettyMIDI(resolution=1000)
             instrument = pretty_midi.Instrument(program=ins_list[i])
-            tone_row = np.random.permutation(12)
+            tone_row = np.arange(60, 72)
             for k in range(120):  # 2 minutes
                 note = pretty_midi.Note(
                     velocity=np.random.randint(80, 121),
-                    pitch=tone_row[k % 12] + 60,
+                    pitch=tone_row[k % 12],
                     start=k
                     * 1.056,  # start and end both in seconds. Every note has the duration of 1 second, but there should be a short gap (a hop_length) between notes
                     end=k * 1.056 + 1,  #
