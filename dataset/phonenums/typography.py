@@ -175,7 +175,7 @@ class Typography:
             canvas = random_gradual_blur(canvas)
         # Gaussian noise
         if "gaussian" in distortion:
-            noise = np.random.normal(0, np.random.random() * 10, canvas.shape)
+            noise = np.random.normal(0, np.random.random(), canvas.shape)
             # noise = np.clip(noise, -5, 5)
             canvas += np.uint8(noise)
             canvas = np.clip(canvas, 0, 255)
