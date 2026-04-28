@@ -1,4 +1,5 @@
 import os
+import inspect
 from importlib import import_module
 from copy import deepcopy
 from glob import glob
@@ -24,7 +25,9 @@ class Tester:
         """
         super(Tester, self).__init__()
         self.config = config
-        if self.config["debug"]:
+        if "portion" in self.config:
+            self.portion = float(self.config["portion"])
+        elif self.config["debug"]:
             self.portion = 0.1
         else:
             self.portion = 1
@@ -34,6 +37,8 @@ class Tester:
         # device
         if self.config["device"] == "cuda" and torch.cuda.is_available():
             self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
 
     def prepare_data(self):
         config = self.config
@@ -78,7 +83,9 @@ class Tester:
             self.model = get_model(config["dataloader"], model_config).to(self.device)
             from model.v3_loss import V3Loss as Loss
 
-        cp_state_dict = torch.load(config["active_checkpoint"])["model"]
+        cp_state_dict = torch.load(
+            config["active_checkpoint"], map_location=self.device
+        )["model"]
 
         self.model.load_state_dict(cp_state_dict, strict=False)
         self.model.eval()
@@ -183,10 +190,16 @@ class Tester:
         all_emb_s = [x[3] for x in self.results]
         all_emb_s = np.array(all_emb_s)
 
+        tsne_kwargs = {"n_components": 3}
+        if "max_iter" in inspect.signature(TSNE).parameters:
+            tsne_kwargs["max_iter"] = 1000
+        else:
+            tsne_kwargs["n_iter"] = 1000
+
         tsne_c = TSNE(
-            n_components=3, max_iter=1000
+            **tsne_kwargs
         )  # make use of the minor intra-class difference to plot TSNE
-        tsne_s = TSNE(n_components=3, max_iter=1000)
+        tsne_s = TSNE(**tsne_kwargs)
         all_emb_c_and_codebook = np.concatenate((all_emb_c, self.codebook), axis=0)
         emb_c_and_codebook_tsne = tsne_c.fit_transform(all_emb_c_and_codebook)
         emb_s_tsne = tsne_s.fit_transform(all_emb_s)
@@ -345,28 +358,43 @@ class Tester:
 
         return perm
 
-    def compute_retrieval_metrics(self):
-        k_list = [
-            1,
-            2,
-            5,
-            10,
-            20,
-            50,
-            75,
-            100,
-            200,
-            300,
-            400,
-            500,
-            750,
-            1000,
-            1500,
-            2000,
-            2500,
-            3000,
-        ]
+    @staticmethod
+    def _build_adaptive_k_list(labels):
+        """
+        Build a k list that scales with the number of positives in the current
+        evaluation set, so PR metrics remain more comparable across different
+        dataset portions.
+        """
+        _, counts = np.unique(labels, return_counts=True)
+        max_pos = int(np.max(counts) - 1)
+        if max_pos < 1:
+            return [1]
 
+        fractions = [
+            0.001,
+            0.002,
+            0.005,
+            0.01,
+            0.02,
+            0.05,
+            0.075,
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            0.5,
+            0.75,
+            1.0,
+        ]
+        k_list = {1, 2, 5, 10, 20, 50, 100, 200, 500}
+        for frac in fractions:
+            k = int(round(max_pos * frac))
+            if k >= 1:
+                k_list.add(min(k, max_pos))
+
+        return sorted(k_list)
+
+    def compute_retrieval_metrics(self):
         all_content_idx = [x[1] for x in self.ground_truth]
         all_content_idx = np.array(all_content_idx)
         all_style_idx = [x[2] for x in self.ground_truth]
@@ -377,19 +405,24 @@ class Tester:
         all_emb_s = [x[3] for x in self.results]
         all_emb_s = np.array(all_emb_s)
 
+        content_k_list = self._build_adaptive_k_list(all_content_idx)
+        style_k_list = self._build_adaptive_k_list(all_style_idx)
+        print("Content k_list:", content_k_list)
+        print("Style k_list:", style_k_list)
+
         # compute the precision & recall at k metrics
         c_precisions, c_recalls, c_f1s = precision_recall_at_k(
-            all_emb_c, all_content_idx, k_list
+            all_emb_c, all_content_idx, content_k_list
         )
         s_precisions, s_recalls, s_f1s = precision_recall_at_k(
-            all_emb_s, all_style_idx, k_list
+            all_emb_s, all_style_idx, style_k_list
         )
         # check using the other label
         c_precisions_using_s, c_recalls_using_s, c_f1s_using_s = precision_recall_at_k(
-            all_emb_s, all_content_idx, k_list
+            all_emb_s, all_content_idx, content_k_list
         )
         s_precisions_using_c, s_recalls_using_c, s_f1s_using_c = precision_recall_at_k(
-            all_emb_c, all_style_idx, k_list
+            all_emb_c, all_style_idx, style_k_list
         )
 
         c_auc = area_under_prcurve(c_recalls, c_precisions)

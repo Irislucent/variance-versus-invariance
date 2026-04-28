@@ -30,77 +30,84 @@ def mscatter_3d(x, y, z, ax=None, m=None, **kw):
     return sc
 
 
-def precision_recall_at_k(emb, labels, k_list=[1, 2, 5, 10, 20, 50, 100, 200, 500]):
+def precision_recall_at_k(
+    emb,
+    labels,
+    k_list=[1, 2, 5, 10, 20, 50, 100, 200, 500],
+    use_gpu=True,
+    chunk_size=1024,
+    eval_device=None,
+):
     """
-    Find the nearest k samples to the input sample
-    Compute the precision & recall at k metrics using a list of positive samples
-    Also compute the F1 score
-    emb: the embeddings of the samples (n_samples, emb_dim)
-    labels: the labels of the samples (n_samples,)
-    k_list: the list of k values
+    Exact precision / recall / f1 at k with chunked GPU computation.
 
-    Return: the precision, recall, F1 score at k
+    - preserves exact Euclidean-distance ranking
+    - excludes self-match from retrieval
+    - avoids materializing a full NxN distance matrix
     """
+    emb = torch.as_tensor(emb, dtype=torch.float32)
+    labels = torch.as_tensor(labels)
+
+    if eval_device is not None:
+        device = torch.device(eval_device)
+    else:
+        device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+
+    emb = emb.to(device, non_blocking=True)
+    labels = labels.to(device, non_blocking=True)
+
     n_samples = emb.shape[0]
+    max_k = max(k_list)
+    if max_k >= n_samples:
+        max_k = n_samples - 1
+        k_list = [min(k, max_k) for k in k_list]
 
-    all_precisions = []
-    all_recalls = []
-    all_f1s = []
+    emb_sq = (emb**2).sum(dim=1)
 
-    for i in range(n_samples):
-        # find all the positive samples
-        pos_indices = []
-        for j in range(n_samples):
-            if labels[j] == labels[i] and j != i:
-                pos_indices.append(j)
+    all_precisions_sum = {k: 0.0 for k in k_list}
+    all_recalls_sum = {k: 0.0 for k in k_list}
+    all_f1s_sum = {k: 0.0 for k in k_list}
 
-        # compute distances from the input to all the samples
-        all_distances = {}
-        for j in range(n_samples):
-            d = np.linalg.norm(emb[i] - emb[j])
-            all_distances[j] = d
-        all_distances = sorted(all_distances.items(), key=lambda x: x[1])
+    for start in range(0, n_samples, chunk_size):
+        end = min(start + chunk_size, n_samples)
+        bsz = end - start
 
-        # compute the precision & recall at k metrics
-        precision_list = []
-        recall_list = []
-        f1_list = []
+        emb_chunk = emb[start:end]
+        labels_chunk = labels[start:end]
+        emb_chunk_sq = (emb_chunk**2).sum(dim=1, keepdim=True)
+
+        dist_chunk = emb_chunk_sq + emb_sq.unsqueeze(0) - 2.0 * (emb_chunk @ emb.T)
+        dist_chunk.clamp_(min=0.0)
+
+        row_idx = torch.arange(bsz, device=device)
+        col_idx = torch.arange(start, end, device=device)
+        dist_chunk[row_idx, col_idx] = float("inf")
+
+        nn_idx_chunk = torch.topk(
+            dist_chunk, k=max_k, largest=False, dim=1
+        ).indices
+
+        n_pos_chunk = (labels_chunk.unsqueeze(1) == labels.unsqueeze(0)).sum(dim=1) - 1
+        n_pos_chunk = n_pos_chunk.clamp(min=1)
+
+        retrieved_labels = labels[nn_idx_chunk]
+        retrieved_positive = retrieved_labels == labels_chunk.unsqueeze(1)
+
         for k in k_list:
-            # find the nearest k samples
-            nearest_k = all_distances[:k]
-            nearest_k = [x[0] for x in nearest_k]
-
-            # compute the precision and recall at k metric
-            precision = 0
-            recall = 0
-            for j in nearest_k:
-                if j in pos_indices:
-                    precision += 1
-                    recall += 1
-            precision /= k
-            recall /= len(pos_indices)
-            precision_list.append(precision)
-            recall_list.append(recall)
-
-            # compute the f1 score
+            tp = retrieved_positive[:, :k].sum(dim=1).float()
+            precision = tp / float(k)
+            recall = tp / n_pos_chunk.float()
             f1 = 2 * precision * recall / (precision + recall + 1e-8)
-            f1_list.append(f1)
 
-        precision_list = np.array(precision_list)
-        recall_list = np.array(recall_list)
-        f1_list = np.array(f1_list)
+            all_precisions_sum[k] += precision.sum().item()
+            all_recalls_sum[k] += recall.sum().item()
+            all_f1s_sum[k] += f1.sum().item()
 
-        all_precisions.append(precision_list)
-        all_recalls.append(recall_list)
-        all_f1s.append(f1_list)
+        del dist_chunk, nn_idx_chunk, retrieved_labels, retrieved_positive, n_pos_chunk
 
-    all_precisions = np.array(all_precisions)
-    all_recalls = np.array(all_recalls)
-    all_f1s = np.array(all_f1s)
-
-    all_precisions = np.mean(all_precisions, axis=0)
-    all_recalls = np.mean(all_recalls, axis=0)
-    all_f1s = np.mean(all_f1s, axis=0)
+    all_precisions = np.array([all_precisions_sum[k] / n_samples for k in k_list])
+    all_recalls = np.array([all_recalls_sum[k] / n_samples for k in k_list])
+    all_f1s = np.array([all_f1s_sum[k] / n_samples for k in k_list])
 
     return all_precisions, all_recalls, all_f1s
 
